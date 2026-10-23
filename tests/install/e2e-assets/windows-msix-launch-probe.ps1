@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Out
 )
 $ErrorActionPreference = 'Continue'
+Set-StrictMode -Off
 $log = Join-Path $Out 'msix-launch-probe.txt'
 function Note([string]$Text) { Write-Host "[probe] $Text"; Add-Content -LiteralPath $log -Value $Text }
 function Section([string]$Name, [scriptblock]$Body) {
@@ -73,7 +74,11 @@ function Try-Direct([string]$Label, [string]$File, [string]$Arguments) {
         foreach ($l in $lines) { Note "  [err] $l" }
         Show-PackageProcesses 'after start'
         if ($p.HasExited) { Note "  exited code=$($p.ExitCode)" } else { Note "  still running pid=$($p.Id)" }
-    } catch { Note "  start threw: $($_.Exception.GetType().FullName): $($_.Exception.Message) (native=$($_.Exception.NativeErrorCode))" }
+    } catch {
+        $ex = $_.Exception
+        while ($ex.InnerException) { $ex = $ex.InnerException }
+        Note "  start threw: $($ex.GetType().FullName): $($ex.Message) (native=$($ex.NativeErrorCode) hresult=0x$('{0:X8}' -f $ex.HResult))"
+    }
     Stop-PackageProcesses
 }
 function Try-Activation([string]$Label, [scriptblock]$Body) {
