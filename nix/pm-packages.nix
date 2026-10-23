@@ -47,7 +47,9 @@ let
   # RPATH. autoPatchelf rewrites that into a literal path and leaves the
   # interpreter unable to load its own stdlib, so for it the ELF interpreter
   # and RPATH are set explicitly: $ORIGIN stays, and Nix's glibc is appended.
-  originRpath = name: name == "python";
+  # Only Linux artifacts are ELF; darwin's Mach-O builds run as shipped.
+  originRpath = name: stdenv.hostPlatform.isLinux && name == "python";
+  patchElf = name: stdenv.hostPlatform.isLinux && name != "python";
 
   derive = name: pin: artifacts:
     stdenv.mkDerivation {
@@ -65,7 +67,7 @@ let
       sourceRoot = ".";
       nativeBuildInputs =
         lib.optionals (originRpath name) [ patchelf ]
-        ++ lib.optional (!originRpath name) autoPatchelfHook
+        ++ lib.optional (patchElf name) autoPatchelfHook
         ++ lib.optional (lib.any (a: lib.hasSuffix ".zip" a.url) artifacts) unzip;
       # The upstream tarballs are glibc-linked (interpreter
       # /lib64/ld-linux-x86-64.so.2, which only exists on a host with nix-ld).
@@ -93,16 +95,16 @@ let
       installPhase = ''
         mkdir -p $out
         cp -r . $out/
+        # Nix's build-environment dump, not artifact content.
+        rm -f $out/env-vars
 
         # Archives wrap their tree in one versioned directory
         # (`uv-x86_64-unknown-linux-gnu/`, `node-v26.12.1-linux-x64/`, `package/`).
         # pm's store strips it; mirror that so `$out/bin` is the entry point
-        # instead of `$out/<archive-name>/bin`. `env-vars` is Nix's own file
-        # in $out by the time installPhase runs, so it never counts as content.
+        # instead of `$out/<archive-name>/bin`.
         shopt -s dotglob nullglob
         wrapped=() stray=()
         for entry in "$out"/*; do
-          [ "$(basename "$entry")" = env-vars ] && continue
           if [ -d "$entry" ]; then wrapped+=("$entry"); else stray+=("$entry"); fi
         done
         if [ ''${#wrapped[@]} -eq 1 ] && [ ''${#stray[@]} -eq 0 ]; then
