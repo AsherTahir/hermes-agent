@@ -15,6 +15,7 @@ on:
       tag: {default: '', type: string}
       commit-build: {default: false, type: boolean}
       public-base: {required: true, type: string}
+      windows-runner: {description: DEBUG runner override, default: '', type: string}
   workflow_call:
     inputs:
       platform:
@@ -247,7 +248,7 @@ jobs:
     if: inputs.platform == 'win32'
     # blacksmith Windows steps run in a service session with no logged-on user; the smoke
     # launches the app inside its package (windows-bundle-smoke.ps1) so that works there too.
-    runs-on: ${{ inputs.arch == 'arm64' && 'windows-latest-32-arm-core' || 'blacksmith-32vcpu-windows-2025' }}
+    runs-on: ${{ inputs.windows-runner || (inputs.arch == 'arm64' && 'windows-latest-32-arm-core' || 'blacksmith-32vcpu-windows-2025') }}
     # windows-11-arm runners are much slower (npm ci alone runs 12+ minutes and
     # the MSIX leg exceeds 30 total); x64 legs complete in ~14.
     timeout-minutes: 45
