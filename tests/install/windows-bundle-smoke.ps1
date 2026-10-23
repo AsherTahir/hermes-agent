@@ -86,6 +86,8 @@ try {
         version=$pkg.Version.ToString(); exe=$exe; root=$root; stamp=$stamp } |
         ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $Out 'installed-identity.json')
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Artifact).Hash.ToLowerInvariant() -cne $beforeHash) { throw 'Input artifact changed during installation' }
+    # DEBUG ONLY: launch-route probe for the blacksmith "Access is denied".
+    try { & (Join-Path $Assets 'windows-msix-launch-probe.ps1') -Package $pkg -Exe $exe -Out $Out } catch { Write-Host "probe threw: $_" }
     Push-Location $Work
     try {
         Run-Node @((Join-Path $Assets 'desktop-smoke.ts'), '--exe', $exe, '--root', $root, '--origin', 'bundled',
