@@ -38,6 +38,14 @@ function Start-DesktopJourneyMock([string]$Node, [string]$Assets, [string]$Work,
 # which WMI starts outside its caller's job (probed on hosted runners). A desktop
 # checkpoint therefore runs from such a child, with this step's environment, cwd and
 # arguments replayed from a spec file. Returns the exit code.
+#
+# With -PackageFamilyName/-AppId the child starts inside that installed MSIX package
+# (Invoke-CommandInDesktopPackage) instead, so it and its children carry the package
+# identity a Start-menu launch gives the app. Package files grant execute only to a
+# process with that identity (WIN://SYSAPPID). A plain CreateProcess of the app's exe
+# gets it implicitly only from an interactive logon: on a runner whose steps run in a
+# service session (blacksmith: NSSM service, session 0, no logged-on user) AppModel
+# fails GetPackageToken with 0x80070520 and the launch is "Access is denied".
 $script:OutsideJobWrapper = @'
 param([string]$SpecPath)
 $ErrorActionPreference = 'Continue'
@@ -61,7 +69,8 @@ try {
 }
 '@
 
-function Invoke-OutsideRunnerJob([string]$Name, [string]$Work, [string]$Exe, [string[]]$Arguments, [int]$TimeoutMinutes = 45) {
+function Invoke-OutsideRunnerJob([string]$Name, [string]$Work, [string]$Exe, [string[]]$Arguments, [int]$TimeoutMinutes = 45,
+                                 [string]$PackageFamilyName = '', [string]$AppId = '') {
     $dir = Join-Path $Work "outside-job-$Name"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $spec = Join-Path $dir 'spec.json'
@@ -78,12 +87,27 @@ function Invoke-OutsideRunnerJob([string]$Name, [string]$Work, [string]$Exe, [st
     $script:OutsideJobWrapper | Set-Content -LiteralPath $wrapper -Encoding UTF8
     # The same PowerShell as this step, so native argument passing matches a direct call.
     $shell = (Get-Process -Id $PID).Path
-    $commandLine = "`"$shell`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$wrapper`" -SpecPath `"$spec`""
+    $shellArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$wrapper`" -SpecPath `"$spec`""
     $wrapperPid = 0
     try {
-        $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine; CurrentDirectory = $cwd }
-        if ($created.ReturnValue -ne 0) { throw "Outside-job run '$Name' could not start (Win32_Process.Create returned $($created.ReturnValue))" }
-        $wrapperPid = [int]$created.ProcessId
+        if ($PackageFamilyName) {
+            # -PreventBreakaway keeps the wrapper's children (the driver, then the app it launches)
+            # in the package context; by default they leave it and lose the identity.
+            # Returns no process; find the wrapper by its unique spec path.
+            Invoke-CommandInDesktopPackage -PackageFamilyName $PackageFamilyName -AppId $AppId -Command $shell -Args $shellArgs -PreventBreakaway -ErrorAction Stop
+            $deadline = (Get-Date).AddSeconds(60)
+            while (-not $wrapperPid) {
+                $match = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($spec) })
+                if ($match.Count) { $wrapperPid = [int]$match[0].ProcessId; break }
+                if (Test-Path -LiteralPath $exitFile) { break }
+                if ((Get-Date) -ge $deadline) { throw "Outside-job run '$Name' did not start in package $PackageFamilyName" }
+                Start-Sleep -Milliseconds 200
+            }
+        } else {
+            $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "`"$shell`" $shellArgs"; CurrentDirectory = $cwd }
+            if ($created.ReturnValue -ne 0) { throw "Outside-job run '$Name' could not start (Win32_Process.Create returned $($created.ReturnValue))" }
+            $wrapperPid = [int]$created.ProcessId
+        }
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
         while (-not (Test-Path -LiteralPath $exitFile)) {
             if ((Get-Date) -ge $deadline) { throw "Outside-job run '$Name' did not finish within $TimeoutMinutes minutes" }

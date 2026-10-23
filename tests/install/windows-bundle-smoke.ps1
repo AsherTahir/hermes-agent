@@ -34,6 +34,7 @@ $Expected = (Run-Node (@($Metadata, 'identity') + $identityArgs)) | ConvertFrom-
 Run-Node @($Metadata, 'prepare', '--work', $Work, '--out', $Out)
 . (Join-Path $Assets 'windows-bundle-metadata.ps1')
 . (Join-Path $Assets 'windows-bundle-plugin-smoke.ps1')
+. (Join-Path $Assets 'desktop-smoke-windows.ps1')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $HomeDir = Join-Path $Work 'home'
 $UserData = Join-Path $Work 'user-data'
@@ -88,8 +89,13 @@ try {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Artifact).Hash.ToLowerInvariant() -cne $beforeHash) { throw 'Input artifact changed during installation' }
     Push-Location $Work
     try {
-        Run-Node @((Join-Path $Assets 'desktop-smoke.ts'), '--exe', $exe, '--root', $root, '--origin', 'bundled',
-            '--home', $HomeDir, '--user-data', $UserData, '--out', $Out, '--phase', 'installed', '--expect-commit', $Commit)
+        # The driver runs inside the package so the app it launches has package identity on any
+        # runner, including a service-session one (see Invoke-OutsideRunnerJob).
+        $driver = Join-Path $Assets 'desktop-smoke.ts'
+        $chatExit = Invoke-OutsideRunnerJob 'desktop-installed' $Work $Node @($driver, '--exe', $exe, '--root', $root, '--origin', 'bundled',
+            '--home', $HomeDir, '--user-data', $UserData, '--out', $Out, '--phase', 'installed', '--expect-commit', $Commit) `
+            -PackageFamilyName $pkg.PackageFamilyName -AppId $Expected.applicationId
+        if ($chatExit -ne 0) { throw "Node exited $chatExit ($driver)" }
     } finally { Pop-Location }
     # Plugins whose Python dependencies PM builds must work inside the package (#135236).
     Test-BundlePluginInstall $root $Out
